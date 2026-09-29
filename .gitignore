@@ -21,3 +21,7 @@ outputs/video/*/frames/
 outputs/cache/
 outputs/debug/
 .claude/
+
+# Results: commit our own detections/metrics, never the (derived) GT labels
+outputs/results/*/gt.json
+outputs/video/
