@@ -1,5 +1,5 @@
 # Dataset (CC BY-NC-ND 4.0) and anything derived from it is never committed
-data/
+/data/
 web/public/data/
 outputs/frames/
 *.7z.*
