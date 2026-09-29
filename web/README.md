@@ -12,7 +12,8 @@ from `web/public/data/` (served at `data/`). That directory is git-ignored: the 
 ```bash
 cd web
 npm install
-npm run mock      # optional: synthetic sequence for development (~235 MB in public/data/)
+npm run mock      # optional: synthetic sequence for development (~235 MB in public/data/;
+                  # refuses to overwrite real data - use `npm run mock -- --out <dir>` instead)
 npm run dev       # http://127.0.0.1:5173
 npm run build     # type-check (tsc --noEmit) + production build into dist/
 npm run preview   # serve dist/
@@ -27,6 +28,16 @@ sequence. The mock ray-casts four spinning LiDARs against a 4-way intersection (
 buildings, trees, parked cars, moving cars, a bus, a truck, cyclists and pedestrians with a
 traffic-light cycle), and derives detections (with misses, false positives, a class confusion and
 an ID switch), ground truth, tracks, counts and metrics.
+
+## Ground-truth reference
+
+Most UrbanIng-V2X labels are invisible to the infrastructure LiDARs, so all counting comparisons
+use a GT subset: `counts_trackable` / `unique_trackable` from `gt.json` ("GT (in coverage)":
+vehicles seen with >=5 points in >=5 frames) and `counting_trackable` from `metrics.json`, falling
+back to the `*_visible` fields and then to all labels when they are missing. The number of all
+labels (incl. occluded) is shown only as a footnote. GT boxes with `trackable: false` are not drawn;
+in compare mode, unmatched GT with `ignore: true` (occluded in that frame) is drawn faint grey and
+not counted as a miss.
 
 ## Views and layers
 
@@ -72,7 +83,8 @@ intensity, sensor (per LiDAR) and focus (static background dimmed).
 | `speed`    | `0.5` · `1` · `2` · `4`                  | `1` |
 | `play`     | `1` autoplay · `0` paused                | `1` unless `frame` is given or `ui=0` |
 | `select`   | track id to preselect (useful with `view=follow`) | – |
-| `caption`  | `0` hides the caption when `ui=0`        | `1` when `ui=0` |
+| `caption`  | `0` hides the small stats caption when `ui=0` | `1` when `ui=0` |
+| `title`    | text for the big title overlay           | – |
 
 `layers` lists the overlay layers to enable (`det`, `gt`, `compare`, `map`, `trails`, `labels`);
 the ambient layers `sensors` and `grid` stay on unless listed with a minus (`-grid`). A list made
@@ -103,12 +115,24 @@ window.__viewer = {
   setPointSize(v: number): void,
   select(trackId: number | null): void,
   setUi(visible: boolean): void,
-  setCaption(html: string | null): void,    // custom caption text; null restores the default
+  setCaption(html: string | null): void,    // big title overlay for videos; null hides it.
+                                            // `<small>` = subtitle line, `<span class="kicker">` = overline
+  setCameraPose(pose: CameraPose): void,    // instant perspective camera (switches to the orbit view)
+  getCameraPose(): CameraPose,
+}
+
+interface CameraPose {
+  target: [x, y, z];   // metres, dataset global frame
+  azimuth: number;     // degrees, direction target -> camera, counter-clockwise from +x (east)
+  elevation: number;   // degrees above the horizon (-10 .. 89.5)
+  distance: number;    // metres
+  fov?: number;        // vertical field of view in degrees (default 40)
 }
 ```
 
 A typical capture loop: open with `ui=0&intro=0`, `await __viewer.ready`, then for each frame
-`await __viewer.setFrame(i)` and take a screenshot.
+`__viewer.setCameraPose(...)` (optional, e.g. an interpolated orbit), `await __viewer.setFrame(i)`
+and take a screenshot. `getState()` also returns the current `camera` pose and `title`.
 
 ## Structure
 

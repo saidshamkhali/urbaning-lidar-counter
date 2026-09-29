@@ -30,6 +30,7 @@ export class Timeline {
   private readonly headDotGt: SVGCircleElement;
   private readonly hoverLine: SVGLineElement;
   private dragging = false;
+  private gtLabel = 'gt';
 
   constructor(
     private readonly svg: SVGSVGElement,
@@ -81,6 +82,12 @@ export class Timeline {
     });
   }
 
+  setGtLabel(label: string): void {
+    this.gtLabel = label;
+    const el = document.getElementById('chart-gt-label');
+    if (el) el.textContent = label;
+  }
+
   setData(det: number[], gt: number[] | null, fps: number, n: number): void {
     this.det = det;
     this.gt = gt;
@@ -119,7 +126,7 @@ export class Timeline {
     this.hoverLine.setAttribute('visibility', 'visible');
     const d = this.det[f] ?? 0;
     const g = this.gt?.[f];
-    this.tip.innerHTML = `f ${f} <em>·</em> ${(f / this.fps).toFixed(1)} s <em>·</em> det <b>${d}</b>${g !== undefined ? ` <em>· gt ${g}</em>` : ''}`;
+    this.tip.innerHTML = `f ${f} <em>·</em> ${(f / this.fps).toFixed(1)} s <em>·</em> det <b>${d}</b>${g !== undefined ? ` <em>· ${this.gtLabel} ${g}</em>` : ''}`;
     const parent = this.svg.parentElement;
     const off = parent ? this.svg.getBoundingClientRect().left - parent.getBoundingClientRect().left : 0;
     this.tip.style.left = `${off + x}px`;

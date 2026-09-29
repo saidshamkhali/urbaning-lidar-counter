@@ -58,7 +58,7 @@
               <div class="bignum-row">
                 <div class="bignum" id="c-vehicles">0</div>
                 <div class="bignum-side">
-                  <div class="gt-muted">GT <b id="c-vehicles-gt">–</b></div>
+                  <div class="gt-muted"><span id="c-gt-label">GT</span> <b id="c-vehicles-gt">–</b></div>
                   <div class="delta" id="c-delta"></div>
                 </div>
               </div>
@@ -75,10 +75,14 @@
                 <span><b id="c-vru">0</b><em id="c-vru-gt"></em></span>
               </div>
               <div class="unique">
-                <div class="unique-head"><span>Unique vehicles counted</span><span class="gt-muted" id="u-gt"></span></div>
-                <div class="unique-num"><b id="u-so-far">0</b><span>/ <span id="u-total">0</span></span></div>
+                <div class="unique-head"><span>Unique vehicles counted</span></div>
+                <div class="unique-row">
+                  <div class="unique-num"><b id="u-so-far">0</b><span>/ <span id="u-total">0</span></span></div>
+                  <div class="unique-gt gt-muted" id="u-gt"></div>
+                </div>
                 <div class="progress"><i id="u-bar"></i><s id="u-bar-gt"></s></div>
               </div>
+              <div class="footnote hidden" id="c-foot"></div>
             </div>
           </section>
 
@@ -163,7 +167,7 @@
             <div class="chart" id="chart">
               <div class="chart-legend">
                 <span><i class="ln det"></i>detected</span>
-                <span><i class="ln gt"></i>ground truth</span>
+                <span><i class="ln gt"></i><span id="chart-gt-label">ground truth</span></span>
                 <span class="chart-title">vehicles per frame</span>
               </div>
               <svg id="chart-svg" preserveAspectRatio="none"></svg>
@@ -177,9 +181,12 @@
         </footer>
       </div>
 
-      <div id="caption" class="caption hidden">
-        <div class="cap-title">UrbanIng-V2X · Ingolstadt · infrastructure LiDAR only</div>
-        <div class="cap-line" id="cap-line"></div>
+      <div id="captions" class="captions">
+        <div id="title-card" class="title-card" aria-live="polite"></div>
+        <div id="caption" class="caption hidden">
+          <div class="cap-title">UrbanIng-V2X · Ingolstadt · infrastructure LiDAR only</div>
+          <div class="cap-line" id="cap-line"></div>
+        </div>
       </div>
 
       <div id="help" class="help glass hidden">

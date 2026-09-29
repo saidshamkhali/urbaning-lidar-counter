@@ -19,6 +19,7 @@ export const HEX = {
   fp: '#ff3d58',
   fn: '#ff9f2e',
   gt: '#dfe6f0',
+  occluded: '#6f7c92',
   accent: '#39e1ff',
 };
 

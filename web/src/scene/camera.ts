@@ -4,6 +4,18 @@ import type { Stage } from './stage';
 
 export type ViewName = 'bev' | 'orbit' | 'follow';
 
+export interface CameraPose {
+  target: [number, number, number];
+  /** degrees, counter-clockwise from +x (east), direction target -> camera */
+  azimuth: number;
+  /** degrees above the horizon */
+  elevation: number;
+  /** metres from the target */
+  distance: number;
+  /** vertical field of view, degrees */
+  fov?: number;
+}
+
 interface Sph {
   az: number;
   pol: number;
@@ -302,6 +314,40 @@ export class CameraRig {
     const flying = this.flight !== null;
     this.bevControls.enabled = !flying && this.view === 'bev';
     this.orbitControls.enabled = !flying && this.view !== 'bev';
+  }
+
+  /**
+   * Place the perspective camera instantly (switches to the orbit view).
+   * azimuth: direction from the target to the camera, degrees counter-clockwise from +x (east);
+   * elevation: degrees above the horizon; distance in metres; fov: vertical field of view in degrees.
+   */
+  setPose(p: CameraPose): void {
+    this.flight = null;
+    this.view = 'orbit';
+    const cam = this.stage.persp;
+    if (p.fov !== undefined && Number.isFinite(p.fov)) {
+      cam.fov = Math.min(120, Math.max(5, p.fov));
+      cam.updateProjectionMatrix();
+    }
+    const el = Math.min(89.5, Math.max(-10, p.elevation));
+    const pol = ((90 - el) * Math.PI) / 180;
+    this.orbitControls.maxPolarAngle = Math.max((86 * Math.PI) / 180, pol + 1e-3);
+    const target = new Vector3(p.target[0], p.target[1], p.target[2]);
+    this.stage.setCamera(cam);
+    this.applyPersp({ az: (p.azimuth * Math.PI) / 180, pol, dist: Math.max(0.5, p.distance), target });
+    this.orbitControls.update();
+    this.applyEnabled();
+  }
+
+  getPose(): CameraPose {
+    const s = this.stage.camera === this.stage.ortho ? this.bevAsPersp() : this.currentPerspSph();
+    return {
+      target: [s.target.x, s.target.y, s.target.z],
+      azimuth: (s.az * 180) / Math.PI,
+      elevation: 90 - (s.pol * 180) / Math.PI,
+      distance: s.dist,
+      fov: this.stage.persp.fov,
+    };
   }
 
   /** Shared easing for other animations. */

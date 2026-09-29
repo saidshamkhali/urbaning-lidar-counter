@@ -1,5 +1,5 @@
 import {
-  BufferAttribute, BufferGeometry, Color, Group, Mesh, MeshBasicMaterial, ShapeUtils, Vector2,
+  BufferAttribute, BufferGeometry, Color, Group, LessDepth, Mesh, MeshBasicMaterial, ShapeUtils, Vector2,
 } from 'three';
 import type { MapFile, MapLine } from '../data/types';
 import { SegmentBuffer, makeLineMaterial } from './lines';
@@ -25,16 +25,20 @@ const LINE_STYLES: Record<string, LineStyle> = {
   stop: { color: '#ffffff', width: 2.2, opacity: 0.55, lift: 0.07 },
   zebra: { color: '#ffffff', width: 1.2, opacity: 0.26, lift: 0.06 },
   virtual: { color: '#6f86a6', width: 1.0, opacity: 0.16, dashed: true, dash: 0.6, gap: 1.0, lift: 0.05 },
+  bike: { color: '#9d95e6', width: 1.0, opacity: 0.3, dashed: true, dash: 1.0, gap: 1.0, lift: 0.06 },
   other: { color: '#9aa7ba', width: 1.0, opacity: 0.25, lift: 0.06 },
 };
 
+// Area fills are deliberately faint and cool; overlapping lanelets of the same kind do not stack up.
 const AREA_STYLES: Record<string, { color: string; opacity: number }> = {
-  road: { color: '#6f8fb8', opacity: 0.045 },
-  parking: { color: '#4a8fe0', opacity: 0.05 },
-  crosswalk: { color: '#e6f0ff', opacity: 0.05 },
-  walkway: { color: '#8e7dff', opacity: 0.035 },
-  bicycle_lane: { color: '#ff5c9a', opacity: 0.045 },
-  other: { color: '#7d8aa0', opacity: 0.03 },
+  road: { color: '#8fa3c2', opacity: 0.04 },
+  parking: { color: '#7f97bd', opacity: 0.035 },
+  crosswalk: { color: '#dfe8f5', opacity: 0.055 },
+  walkway: { color: '#a3adc9', opacity: 0.03 },
+  bicycle_lane: { color: '#8e86d8', opacity: 0.045 },
+  island: { color: '#8fa3c2', opacity: 0.025 },
+  vegetation: { color: '#5fb8a6', opacity: 0.035 },
+  other: { color: '#7d8aa0', opacity: 0.02 },
 };
 
 function lineStyleKey(l: MapLine): string {
@@ -44,7 +48,9 @@ function lineStyleKey(l: MapLine): string {
   if (k === 'road_border') return st === 'building' ? 'building' : 'border';
   if (k === 'line_thin' || k === 'line_thick') return st.includes('dashed') ? 'laneDashed' : 'lane';
   if (k === 'stop_line') return 'stop';
-  if (k === 'zebra_marking') return 'zebra';
+  if (k === 'zebra_marking' || k === 'pedestrian_marking') return 'zebra';
+  if (k === 'bike_marking') return 'bike';
+  if (k === 'traffic_light' || k === 'traffic_sign' || k === 'keepout') return 'skip';
   if (k === 'virtual') return 'virtual';
   if (k === 'fence' || k === 'guard_rail' || k === 'wall') return 'border';
   return 'other';
@@ -53,6 +59,8 @@ function lineStyleKey(l: MapLine): string {
 function areaStyleKey(kind: string): string {
   if (kind === 'road' || kind === 'highway' || kind === 'play_street') return 'road';
   if (kind in AREA_STYLES) return kind;
+  if (kind === 'keepout') return 'skip';
+  if (kind.includes('island')) return 'island';
   if (kind.includes('walk') || kind === 'stairs') return 'walkway';
   if (kind.includes('bicycle')) return 'bicycle_lane';
   if (kind.includes('parking')) return 'parking';
@@ -98,6 +106,7 @@ export class MapLayer {
     for (const l of map.lines ?? []) {
       if (!l.points || l.points.length < 2) continue;
       const key = lineStyleKey(l);
+      if (key === 'skip') continue;
       let arr = groups.get(key);
       if (!arr) groups.set(key, (arr = []));
       arr.push(l);
@@ -133,15 +142,17 @@ export class MapLayer {
     for (const a of map.areas ?? []) {
       if (!a.polygon || a.polygon.length < 3) continue;
       const key = areaStyleKey(a.kind);
+      if (key === 'skip') continue;
       let arr = areaGroups.get(key);
       if (!arr) areaGroups.set(key, (arr = []));
       arr.push(a.polygon);
     }
-    const order = ['road', 'parking', 'walkway', 'bicycle_lane', 'crosswalk', 'other'];
+    const order = ['road', 'parking', 'island', 'vegetation', 'walkway', 'bicycle_lane', 'crosswalk', 'other'];
     for (const [key, polys] of areaGroups) {
       const st = AREA_STYLES[key];
       const pos: number[] = [];
-      const z = groundZ - 0.04 + order.indexOf(key) * 0.004;
+      // kept below the ground points; depth-tested against itself so overlaps do not accumulate
+      const z = groundZ - 0.3 + Math.max(0, order.indexOf(key)) * 0.02;
       for (const poly of polys) {
         const contour = poly.map((p) => new Vector2(p[0], p[1]));
         // drop a duplicated closing vertex
@@ -157,7 +168,7 @@ export class MapLayer {
       const geo = new BufferGeometry();
       geo.setAttribute('position', new BufferAttribute(new Float32Array(pos), 3));
       const mesh = new Mesh(geo, new MeshBasicMaterial({
-        color: new Color(st.color), transparent: true, opacity: st.opacity, depthWrite: false, side: 2,
+        color: new Color(st.color), transparent: true, opacity: st.opacity, depthWrite: true, depthFunc: LessDepth, side: 2,
       }));
       mesh.renderOrder = 0;
       this.root.add(mesh);

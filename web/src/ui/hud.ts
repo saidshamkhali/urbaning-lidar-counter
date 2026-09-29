@@ -29,9 +29,26 @@ export interface HudActions {
   followSelected(): void;
 }
 
+export type GtRef = 'trackable' | 'visible' | 'all';
+
+export function gtRefLabel(kind: GtRef): string {
+  return kind === 'trackable' ? 'GT (in coverage)' : kind === 'visible' ? 'GT (visible)' : 'GT';
+}
+
+const GT_REF_HELP: Record<GtRef, string> = {
+  trackable: 'Ground truth restricted to vehicles inside the LiDAR coverage (seen with ≥5 points in ≥5 frames).',
+  visible: 'Ground truth restricted to vehicles with ≥5 LiDAR points in the current frame.',
+  all: 'All ground-truth labels.',
+};
+
 export interface CountView {
   det: FrameCounts;
+  /** reference GT counts (see gtRef) */
   gt: FrameCounts | null;
+  gtRef: GtRef;
+  /** all GT labels incl. occluded / out of coverage, when the reference is a subset */
+  gtAllVehicles: number | null;
+  gtAllUnique: number | null;
   uniqueSoFar: number;
   uniqueTotal: number;
   uniqueSoFarGt: number | null;
@@ -54,6 +71,7 @@ export interface SelectionView {
   maxSpeedKmh: number | null;
   fps: number;
   match: string | null;
+  coasted: boolean;
   following: boolean;
 }
 
@@ -137,7 +155,10 @@ export class Hud {
     sel.replaceChildren(...list.map((s) => {
       const o = document.createElement('option');
       o.value = s.id;
-      o.textContent = s.id;
+      const gtU = s.unique_vehicles_gt_trackable ?? s.unique_vehicles_gt_visible ?? s.unique_vehicles_gt;
+      o.textContent = s.unique_vehicles !== undefined ? `${s.id}  ·  ${s.unique_vehicles} veh${gtU !== undefined ? ` / GT ${gtU}` : ''}` : s.id;
+      o.title = `${s.id}: ${s.unique_vehicles ?? '?'} unique vehicles detected` +
+        (s.unique_vehicles_gt_trackable !== undefined ? `, ${s.unique_vehicles_gt_trackable} in GT within LiDAR coverage (${s.unique_vehicles_gt ?? '?'} labelled incl. occluded)` : '');
       return o;
     }));
     sel.value = current;
@@ -212,6 +233,15 @@ export class Hud {
     const g = c.gt;
     this.big.set(d.vehicle, instant);
     $('c-vehicles-gt').textContent = g ? String(g.vehicle) : '–';
+    const label = gtRefLabel(c.gtRef);
+    $('c-gt-label').textContent = label;
+    $('c-gt-label').title = GT_REF_HELP[c.gtRef];
+    const foot = $('c-foot');
+    if (g && c.gtAllVehicles !== null) {
+      foot.innerHTML = `<span title="${GT_REF_HELP[c.gtRef]}">${label}: labelled vehicles the LiDARs can see.</span> ` +
+        `<span>${c.gtAllVehicles} labelled in frame, ${c.gtAllUnique ?? '–'} in sequence (incl. occluded).</span>`;
+      foot.classList.remove('hidden');
+    } else foot.classList.add('hidden');
     const delta = $('c-delta');
     if (g) {
       const diff = d.vehicle - g.vehicle;
@@ -245,7 +275,8 @@ export class Hud {
     $('u-bar').style.width = `${(c.uniqueSoFar / Math.max(1, c.uniqueTotal)) * 100}%`;
     const ugt = $('u-bar-gt');
     if (c.uniqueSoFarGt !== null && c.uniqueTotalGt !== null) {
-      $('u-gt').innerHTML = `GT <b>${c.uniqueSoFarGt}</b> / ${c.uniqueTotalGt}`;
+      $('u-gt').innerHTML = `<span>${label}</span><span><b>${c.uniqueSoFarGt}</b> / ${c.uniqueTotalGt}</span>`;
+      $('u-gt').title = GT_REF_HELP[c.gtRef];
       ugt.style.display = '';
       ugt.style.left = `${Math.min(100, (c.uniqueSoFarGt / Math.max(1, c.uniqueTotal)) * 100)}%`;
     } else {
@@ -279,11 +310,18 @@ export class Hud {
       </div>
       <div class="gauges">${gauge('Precision', v.precision)}${gauge('Recall', v.recall)}${gauge('F1', v.f1)}</div>`;
     }
-    const c = m.counting;
+    const cRef = m.counting_trackable ?? m.counting_visible ?? m.counting;
+    const refName = m.counting_trackable ? 'in coverage' : m.counting_visible ? 'visible' : 'all labels';
+    const maeTip = [
+      m.counting_trackable?.mae !== undefined ? `vs GT in coverage: ${fmt(m.counting_trackable.mae)}` : '',
+      m.counting_visible?.mae !== undefined ? `vs GT visible in frame: ${fmt(m.counting_visible.mae)}` : '',
+      m.counting?.mae !== undefined ? `vs all labels (incl. occluded): ${fmt(m.counting.mae)}` : '',
+    ].filter(Boolean).join('\n');
     const t = m.tracking;
-    if (c || t) {
+    if (cRef || t) {
       html += `<div class="eval-row3">
-        ${tile('Count MAE', fmt(c?.mae, 2))}
+        <div class="tile" title="Mean absolute error of the per-frame vehicle count
+${maeTip}"><div class="k">Count MAE</div><div class="v">${fmt(cRef?.mae, 2)}</div><div class="tile-sub">vs GT ${refName}</div></div>
         ${tile('MOTA', t?.mota !== undefined ? pct(t.mota) : '–', '', t?.mota !== undefined ? '%' : '')}
         ${tile('ID sw.', t?.id_switches !== undefined ? String(t.id_switches) : '–')}
       </div>`;
@@ -333,6 +371,7 @@ export class Hud {
     if (s.score !== null) rows.push(['score', s.score.toFixed(2)]);
     if (s.nPoints !== null) rows.push(['points', String(s.nPoints)]);
     if (s.match) rows.push(['vs GT', s.match]);
+    if (s.coasted) rows.push(['state', 'coasted (predicted)']);
     $('i-kv').innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
     $('i-follow').classList.toggle('on', s.following);
   }
@@ -357,6 +396,22 @@ export class Hud {
     }
     cap.classList.remove('hidden');
     $('cap-line').innerHTML = html;
+  }
+
+  setTitle(html: string | null): void {
+    const el = $('title-card');
+    if (html === null) {
+      el.classList.remove('show');
+      el.innerHTML = '';
+      return;
+    }
+    if (el.innerHTML !== html) {
+      el.innerHTML = html;
+      // restart the entrance animation
+      el.classList.remove('show');
+      void el.offsetWidth;
+    }
+    el.classList.add('show');
   }
 
   setUiVisible(v: boolean): void {

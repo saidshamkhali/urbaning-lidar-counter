@@ -10,14 +10,31 @@
  * trees, parked cars and moving road users, so objects are only sampled on their visible
  * surfaces and occlude each other like in a real scan.
  *
- * Usage: node scripts/make-mock-data.mjs [--frames 200] [--az 900] [--channels 48]
+ * Usage: node scripts/make-mock-data.mjs [--frames 200] [--az 900] [--channels 48] [--out <dir>] [--force]
+ *
+ * Refuses to write into a data folder that already holds real (non-mock) sequences unless --force.
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const OUT = path.resolve(HERE, '../public/data');
+const outArg = process.argv.indexOf('--out');
+const OUT = outArg >= 0 && process.argv[outArg + 1] ? path.resolve(process.argv[outArg + 1]) : path.resolve(HERE, '../public/data');
+{
+  const idx = path.join(OUT, 'index.json');
+  if (fs.existsSync(idx) && !process.argv.includes('--force')) {
+    let real = [];
+    try {
+      real = (JSON.parse(fs.readFileSync(idx, 'utf8')).sequences ?? []).filter((s) => !String(s.id).startsWith('mock_'));
+    } catch { /* unreadable index: treat as foreign data */ real = [{ id: '?' }]; }
+    if (real.length) {
+      console.error(`${OUT} already contains real sequences (${real.map((s) => s.id).join(', ')}).\n` +
+        'Refusing to overwrite. Use --out <dir> to write the mock elsewhere, or --force.');
+      process.exit(1);
+    }
+  }
+}
 const SEQ = 'mock_crossing1_demo';
 
 function arg(name, def) {
@@ -604,7 +621,7 @@ for (let f = 0; f < N_FRAMES; f++) {
     const st = o.states[f];
     if (!inBounds(st)) continue;
     gt.push({
-      id: 1000 + o.id, cls: o.cls,
+      id: 1000 + o.id, cls: o.cls, ignore: hits[o.id] < 5, trackable: true,
       box: [st.x, st.y, st.gz + o.h / 2, o.l, o.w, o.h, st.yaw].map(r4),
       score: 1.0, moving: st.speed > 1.0, speed: r2(st.speed), n_points: hits[o.id],
     });

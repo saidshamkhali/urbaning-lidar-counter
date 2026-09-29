@@ -5,14 +5,14 @@ import { MatchCache, type FrameMatch } from './data/match';
 import type { Detection, IndexFile } from './data/types';
 import { VEHICLE_CLASSES, groupOf } from './data/types';
 import { BoxLayer, type BoxStyle } from './scene/boxes';
-import { CameraRig, type ViewName } from './scene/camera';
+import { CameraRig, type CameraPose, type ViewName } from './scene/camera';
 import { Grid, SensorLayer } from './scene/environment';
 import { MapLayer, estimateGroundZ } from './scene/map';
 import { HEX, classColor, classHex } from './scene/palette';
 import { COLOR_MODES, PointLayer, type ColorMode } from './scene/points';
 import { Stage } from './scene/stage';
 import { TrailLayer } from './scene/trails';
-import { Hud, LAYER_DEFS, type LayerKey, type Layers } from './ui/hud';
+import { Hud, LAYER_DEFS, gtRefLabel, type LayerKey, type Layers } from './ui/hud';
 import { Timeline } from './ui/timeline';
 
 // ------------------------------------------------------------------------------------------
@@ -73,6 +73,8 @@ interface ViewerState {
   ui: boolean;
   cachedFrames: number;
   introRunning: boolean;
+  title: string | null;
+  camera: CameraPose;
 }
 
 // ------------------------------------------------------------------------------------------
@@ -107,7 +109,8 @@ class App {
   selectedId: number | null = null;
   hoveredId: number | null = null;
   uiVisible: boolean;
-  customCaption: string | null = null;
+  /** big title overlay (video titles), set via ?title= or __viewer.setCaption() */
+  title: string | null = null;
   showCaption: boolean;
   groundZ = 0.45;
   focus = new Vector3();
@@ -153,6 +156,8 @@ class App {
     if ([0.5, 1, 2, 4].includes(speed)) this.speed = speed;
     this.uiVisible = boolParam('ui', true);
     this.showCaption = boolParam('caption', !this.uiVisible);
+    const title = params.get('title');
+    if (title) this.title = escapeHtml(title);
     const sel = params.get('select');
     if (sel !== null && sel !== '' && Number.isFinite(Number(sel))) this.selectedId = Number(sel);
 
@@ -178,6 +183,7 @@ class App {
       },
     );
     this.hud.setUiVisible(this.uiVisible);
+    this.hud.setTitle(this.title);
     this.hud.setSpeed(this.speed);
     this.hud.setColorMode(this.colorMode);
     this.hud.setPointSize(this.pointSize);
@@ -186,8 +192,8 @@ class App {
     this.applyLayerVisibility();
 
     const dock = document.querySelector<HTMLElement>('.dock')!;
-    const hudEl = document.getElementById('hud')!;
-    new ResizeObserver(() => hudEl.style.setProperty('--dock-h', `${dock.offsetHeight + 10}px`)).observe(dock);
+    const root = document.documentElement;
+    new ResizeObserver(() => root.style.setProperty('--dock-h', `${dock.offsetHeight + 10}px`)).observe(dock);
 
     this.bindPointer();
     this.bindKeys();
@@ -286,9 +292,10 @@ class App {
     const classes = VEHICLE_CLASSES.filter((c) => ['car', 'van', 'truck', 'bus'].includes(c) || present.has(c));
     this.hud.setClasses(classes);
     this.hud.setMetrics(seq.metrics);
+    this.timeline.setGtLabel(seq.gt ? gtRefLabel(seq.gt.refKind) : 'ground truth');
     this.timeline.setData(
       seq.det.counts.map((c) => c.vehicle),
-      seq.gt ? seq.gt.counts.map((c) => c.vehicle) : null,
+      seq.gt ? seq.gt.refCounts.map((c) => c.vehicle) : null,
       meta.fps || 10,
       meta.n_frames,
     );
@@ -403,10 +410,26 @@ class App {
 
     if (seq.gt && (compare || this.layers.gt)) {
       this.gtBoxes.update(gts, (g, i, s) => {
-        if (hidden(g)) { s.visible = false; return; }
+        // labels never seen by the infrastructure LiDARs are out of coverage: not drawn
+        if (hidden(g) || g.trackable === false) { s.visible = false; return; }
+        const occluded = g.ignore === true;
         if (compare && match) {
-          if (match.gtToDet[i] >= 0 && !this.layers.gt) { s.visible = false; return; }
-          const miss = match.gtToDet[i] < 0;
+          const matched = match.gtToDet[i] >= 0;
+          if (matched && !this.layers.gt) { s.visible = false; return; }
+          if (!matched && match.gtExcused[i]) {
+            // occluded in this frame: not a miss
+            s.color.set(HEX.occluded);
+            s.intensity = 0.4;
+            s.linewidth = 0.9;
+            s.fillOpacity = 0;
+            s.bodyOpacity = 0;
+            if (this.layers.labels || this.hoveredId === g.id) {
+              s.label = `<i></i><b>GT ${g.id}</b><span>${escapeHtml(g.cls)}</span><em>occluded</em>`;
+              s.labelColor = HEX.occluded;
+            }
+            return;
+          }
+          const miss = !matched;
           s.color.set(miss ? HEX.fn : HEX.gt);
           s.intensity = miss ? 1.35 : 0.55;
           s.linewidth = miss ? 1.8 : 1.0;
@@ -418,9 +441,9 @@ class App {
           }
           return;
         }
-        s.color.set(HEX.gt);
-        s.intensity = 0.8;
-        s.linewidth = 1.1;
+        s.color.set(occluded ? HEX.occluded : HEX.gt);
+        s.intensity = occluded ? 0.35 : 0.8;
+        s.linewidth = occluded ? 0.8 : 1.1;
         s.fillOpacity = 0;
         s.bodyOpacity = 0;
       });
@@ -438,14 +461,17 @@ class App {
 
     // HUD
     const dc = seq.det.counts[f] ?? { vehicle: 0, vru: 0 };
-    const gc = seq.gt?.counts[f] ?? null;
+    const gt = seq.gt;
     this.hud.updateCounts({
       det: dc,
-      gt: gc,
+      gt: gt?.refCounts[f] ?? null,
+      gtRef: gt?.refKind ?? 'all',
+      gtAllVehicles: gt && gt.refKind !== 'all' ? gt.counts[f]?.vehicle ?? null : null,
+      gtAllUnique: gt && gt.refKind !== 'all' ? gt.uniqueVehicles : null,
       uniqueSoFar: seq.det.cumulative('vehicle', f),
       uniqueTotal: seq.det.uniqueVehicles,
-      uniqueSoFarGt: seq.gt ? seq.gt.cumulative('vehicle', f) : null,
-      uniqueTotalGt: seq.gt ? seq.gt.uniqueVehicles : null,
+      uniqueSoFarGt: gt ? gt.cumulativeRef(f) : null,
+      uniqueTotalGt: gt ? gt.uniqueRefVehicles : null,
     }, instant);
     if (match) this.hud.setCompareStats(match.tp, match.fp, match.fn);
     this.updateSelectionCard(match);
@@ -466,6 +492,8 @@ class App {
     }
     if (match) s.intensity = Math.max(s.intensity, 1.15);
     if ((d.score ?? 1) < 0.4) s.intensity *= 0.8;
+    // tracker-predicted boxes without a supporting detection
+    if (d.coasted) { s.intensity *= 0.55; s.fillOpacity *= 0.4; s.bodyOpacity = 0; }
     if (hov) { s.intensity *= 1.45; s.linewidth += 0.7; s.fillOpacity += 0.06; }
     if (sel) { s.intensity = 1.9; s.linewidth = 2.8; s.fillOpacity = 0.2; s.bodyOpacity = 0.06; }
     if (sel || hov || this.layers.labels) {
@@ -507,6 +535,7 @@ class App {
       maxSpeedKmh: tr?.max_speed !== undefined ? tr.max_speed * 3.6 : null,
       fps: seq.meta.fps || 10,
       match: match && idx >= 0 ? (match.detToGt[idx] >= 0 ? 'true positive' : 'false positive') : null,
+      coasted: d?.coasted ?? false,
       following: this.rig.view === 'follow',
     });
   }
@@ -514,10 +543,6 @@ class App {
   private updateCaption(): void {
     if (!this.showCaption || this.uiVisible) {
       this.hud.setCaption(null);
-      return;
-    }
-    if (this.customCaption !== null) {
-      this.hud.setCaption(this.customCaption);
       return;
     }
     const seq = this.seq;
@@ -729,6 +754,17 @@ class App {
     });
   }
 
+  setTitle(html: string | null): void {
+    this.title = html && html.trim() ? html : null;
+    this.hud.setTitle(this.title);
+  }
+
+  setCameraPose(p: CameraPose): void {
+    if (!p || !Array.isArray(p.target) || p.target.length < 3) throw new Error('setCameraPose: target [x, y, z] required');
+    this.rig.setPose(p);
+    this.hud.setView('orbit', this.selectedId !== null);
+  }
+
   setUi(v: boolean): void {
     this.uiVisible = v;
     this.hud.setUiVisible(v);
@@ -860,6 +896,8 @@ class App {
       ui: this.uiVisible,
       cachedFrames: this.cache?.size ?? 0,
       introRunning: this.introRunning,
+      title: this.title,
+      camera: this.rig.getPose(),
     };
   }
 
@@ -894,7 +932,11 @@ declare global {
       setPointSize(v: number): void;
       select(id: number | null): void;
       setUi(visible: boolean): void;
+      /** big title overlay for videos (HTML; `<small>` = subtitle, `<span class="kicker">` = overline); null hides it */
       setCaption(html: string | null): void;
+      /** instant perspective camera pose (degrees / metres); switches to the orbit view */
+      setCameraPose(pose: CameraPose): void;
+      getCameraPose(): CameraPose;
     };
   }
 }
@@ -933,9 +975,10 @@ window.__viewer = {
   setPointSize: (v) => app.setPointSize(v),
   select: (id) => app.select(id),
   setUi: (v) => app.setUi(v),
-  setCaption: (html) => {
-    app.customCaption = html;
-    app.showCaption = html !== null || !app.uiVisible;
-    app.refreshOverlays();
+  setCaption: (html) => app.setTitle(html),
+  setCameraPose: (pose) => {
+    app.setCameraPose(pose);
+    app.renderNow();
   },
+  getCameraPose: () => app.rig.getPose(),
 };

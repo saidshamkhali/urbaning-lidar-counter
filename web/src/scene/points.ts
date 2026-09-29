@@ -36,11 +36,12 @@ const vertexShader = /* glsl */ `
 
   vec3 heightRamp(float h) {
     // h: metres above ground
-    if (h < 0.5) return mix(uRamp[0], uRamp[1], smoothstep(0.12, 0.5, h));
-    if (h < 1.6) return mix(uRamp[1], uRamp[2], (h - 0.5) / 1.1);
-    if (h < 3.4) return mix(uRamp[2], uRamp[3], (h - 1.6) / 1.8);
-    if (h < 8.0) return mix(uRamp[3], uRamp[4], (h - 3.4) / 4.6);
-    return mix(uRamp[4], uRamp[5], clamp((h - 8.0) / 8.0, 0.0, 1.0));
+    // tuned for pole-mounted LiDARs at an intersection: cars reach cyan, trucks/walls yellow-amber
+    if (h < 0.4) return mix(uRamp[0], uRamp[1], smoothstep(0.15, 0.4, h));
+    if (h < 1.3) return mix(uRamp[1], uRamp[2], (h - 0.4) / 0.9);
+    if (h < 2.6) return mix(uRamp[2], uRamp[3], (h - 1.3) / 1.3);
+    if (h < 4.2) return mix(uRamp[3], uRamp[4], (h - 2.6) / 1.6);
+    return mix(uRamp[4], uRamp[5], clamp((h - 4.2) / 6.0, 0.0, 1.0));
   }
 
   vec3 intensityRamp(float t) {
@@ -132,7 +133,7 @@ export class PointLayer {
       uniforms: {
         uScale: { value: 0.01 },
         uOrigin: { value: new Vector3() },
-        uSize: { value: 0.11 },
+        uSize: { value: 0.09 },
         uSizeMul: { value: 1 },
         uIsOrtho: { value: 1 },
         uPxPerMetre: { value: 5 },
@@ -210,7 +211,7 @@ export class PointLayer {
     u.uPxPerMetre.value = pxPerMetre;
     u.uPerspK.value = perspK;
     u.uMinPx.value = 1.35 * pixelRatio;
-    u.uMaxPx.value = 10 * pixelRatio;
+    u.uMaxPx.value = 7 * pixelRatio;
   }
 
   setScan(cx: number, cy: number, radius: number): void {
