@@ -250,7 +250,17 @@ class Detector:
         (e.g. a car split by an occluding pole, or the front and back of a bus)."""
         from .geometry import bev_intersection_matrix
 
+        from scipy.spatial import cKDTree
+
         vehicle = {"car", "van", "truck", "bus"}
+        max_len = {"car": 5.6, "van": 6.5, "truck": 13.0, "bus": 14.0}
+
+        def gap(da: Cluster, db: Cluster) -> float:
+            a, b = pts[da.idx, :2], pts[db.idx, :2]
+            if len(a) > len(b):
+                a, b = b, a
+            return float(cKDTree(b).query(a, k=1)[0].min())
+
         changed = True
         while changed and len(dets) > 1:
             changed = False
@@ -259,13 +269,23 @@ class Detector:
             area = boxes[:, 3] * boxes[:, 4]
             overlap = inter / np.minimum(area[:, None], area[None, :])
             np.fill_diagonal(overlap, 0)
-            for a, b in zip(*np.nonzero(np.triu(overlap > 0.25))):
+            dist = np.hypot(*(boxes[:, None, :2] - boxes[None, :, :2]).transpose(2, 0, 1))
+            cand = np.triu((overlap > 0.25) | (dist < 9.0), 1)
+            # most-overlapping pairs first
+            pairs = sorted(zip(*np.nonzero(cand)), key=lambda ab: -overlap[ab[0], ab[1]])
+            for a, b in pairs:
                 da, db = dets[a], dets[b]
                 if da.cls not in vehicle or db.cls not in vehicle:
                     continue
+                if overlap[a, b] <= 0.25 and gap(da, db) > 1.0:
+                    continue
                 idx = np.concatenate([da.idx, db.idx])
                 merged = self._make_cluster(pts, idx, info)
-                if merged is None or merged.box[3] > 14.0:
+                if merged is None:
+                    continue
+                big = da if da.n_points >= db.n_points else db
+                limit = max(max_len[da.cls], max_len[db.cls]) if big.cls in ("truck", "bus") else max_len[big.cls]
+                if merged.box[3] > limit or merged.box[4] > 3.0:
                     continue
                 self.classify([merged])
                 if merged.cls not in vehicle:  # the union doesn't look like one vehicle
