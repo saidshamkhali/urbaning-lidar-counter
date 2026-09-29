@@ -84,10 +84,14 @@ def find_7z() -> str:
     sys.exit("7-Zip not found. Install it (https://www.7-zip.org) and re-run.")
 
 
-def extract(archive: Path, out_dir: Path, seq: str) -> None:
-    """Extract only infrastructure LiDAR folders + calibration/time-sync metadata."""
-    patterns = [f"{seq}/crossing*_lidar/*", f"{seq}/calibration.json", f"{seq}/timesync_info.csv", f"{seq}/weather_data.json"]
-    cmd = [find_7z(), "x", str(archive), f"-o{out_dir}", "-y", "-r"] + patterns
+def extract(archive: Path, out_dir: Path) -> None:
+    """Extract only infrastructure LiDAR folders + calibration/time-sync metadata.
+
+    Archives store their content at the root (no sequence folder), so `out_dir`
+    must be the sequence directory.
+    """
+    patterns = ["crossing*_lidar", "calibration.json", "timesync_info.csv", "weather_data.json"]
+    cmd = [find_7z(), "x", str(archive), f"-o{out_dir}", "-y"] + patterns
     print("  extracting", archive.name, "->", out_dir, flush=True)
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL)
 
@@ -119,7 +123,7 @@ def main() -> None:
             download(files[p]["id"], files[p]["size"], raw / p)
         if args.no_extract:
             continue
-        extract(raw / parts[0], args.data_dir / "dataset", seq)
+        extract(raw / parts[0], args.data_dir / "dataset" / seq)
         if not args.keep_archives:
             for p in parts:
                 (raw / p).unlink(missing_ok=True)
