@@ -1,0 +1,16 @@
+# Dataset (CC BY-NC-ND 4.0) and anything derived from it is never committed
+data/
+web/public/data/
+outputs/frames/
+*.7z.*
+download.log
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Node
+node_modules/
+web/dist/
