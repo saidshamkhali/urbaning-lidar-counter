@@ -48,8 +48,8 @@ async function main() {
   const browser = await chromium.launch({ args: ["--use-angle=d3d11", "--enable-gpu", "--ignore-gpu-blocklist"] });
   const page = await browser.newPage({ viewport: { width: o.width, height: o.height }, deviceScaleFactor: o.scale });
   page.on("console", (m) => m.type() === "error" && console.error("[page]", m.text()));
-  const url = `${o.url}?seq=${o.seq}&intro=0&ui=${o.ui}`;
-  await page.goto(url, { waitUntil: "networkidle" });
+  const url = `${o.url}?seq=${o.seq}&intro=0&ui=${o.ui}&frame=0`; // frame= disables autoplay
+  await page.goto(url, { waitUntil: "load" });
   await page.waitForFunction(() => window.__viewer !== undefined, null, { timeout: 60000 });
   await page.evaluate(() => window.__viewer.ready);
 

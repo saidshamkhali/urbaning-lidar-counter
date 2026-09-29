@@ -175,3 +175,15 @@ Little-endian, `n_points × 8` bytes, one record per point:
 `line_thick`, `virtual`, `stop_line`, `zebra_marking`, …) and `subtype` its `subtype` tag
 (`solid`, `dashed`, `high`, `low`, …). `areas` are lanelet polygons (left bound + reversed right
 bound); `kind` is the lanelet `subtype` (`road`, `walkway`, `bicycle_lane`, `crosswalk`, …).
+
+### Visibility fields in `gt.json`
+
+Added by `ulc.evaluate.mark_visibility` / `mark_trackable`:
+
+* per object: `n_points` (infrastructure LiDAR points inside the box), `ignore` (`n_points < 5`, i.e. not
+  visible in this frame; treated as *don't care* in detection metrics) and `trackable` (visible in ≥ 5 frames
+  of the sequence);
+* `counts_visible` / `unique_visible`: the `counts` / `unique` blocks restricted to visible objects;
+* `counts_trackable` / `unique_trackable`: restricted to trackable objects ("GT in coverage").
+
+`metrics.json` correspondingly contains `counting` (all labels), `counting_visible` and `counting_trackable`.
