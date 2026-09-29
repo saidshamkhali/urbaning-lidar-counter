@@ -73,19 +73,25 @@ def lshape_yaw(xy: np.ndarray, step_deg: float = 1.0, d0: float = 0.01, max_poin
     return float(theta[int(np.argmax(score))])
 
 
-def fit_box(xy: np.ndarray, zmin: float, zmax: float) -> np.ndarray:
-    """Tight oriented box around points: [x, y, z, l, w, h, yaw] with l ≥ w."""
-    if len(xy) < 3:
+def fit_box(xy: np.ndarray, zmin: float, zmax: float, yaw: float | None = None) -> np.ndarray:
+    """Tight oriented box around points: [x, y, z, l, w, h, yaw] with l ≥ w.
+
+    The heading comes from L-shape fitting unless it is given (e.g. from the lane prior),
+    in which case `l` is measured along the given heading.
+    """
+    fixed = yaw is not None
+    if len(xy) < 3 and not fixed:
         cx, cy = xy.mean(0)
         return np.array([cx, cy, (zmin + zmax) / 2, 0.3, 0.3, zmax - zmin, 0.0])
-    yaw = lshape_yaw(xy - xy.mean(0))
+    if yaw is None:
+        yaw = lshape_yaw(xy - xy.mean(0))
     c, s = np.cos(yaw), np.sin(yaw)
     u = xy[:, 0] * c + xy[:, 1] * s
     v = -xy[:, 0] * s + xy[:, 1] * c
     lu, lv = u.max() - u.min(), v.max() - v.min()
     cu, cv = (u.max() + u.min()) / 2, (v.max() + v.min()) / 2
     cx, cy = cu * c - cv * s, cu * s + cv * c
-    if lv > lu:  # make l the longer side
+    if lv > lu and not fixed:  # make l the longer side
         lu, lv, yaw = lv, lu, yaw + np.pi / 2
     return np.array([cx, cy, (zmin + zmax) / 2, max(lu, 0.1), max(lv, 0.1), zmax - zmin, yaw])
 
@@ -123,11 +129,14 @@ def complete_box(box: np.ndarray, cls: str, sensor_xy: np.ndarray, ground: float
 
 class Detector:
     def __init__(self, scene: SceneModel, sensors_xyz: np.ndarray, classifier=None,
-                 eps: float = 0.55, min_samples: int = 3, min_points: int = 5, max_range: float = 75.0):
+                 eps: float = 0.55, min_samples: int = 3, min_points: int = 5, max_range: float = 75.0,
+                 lane_prior_points: int = 120, lane_prior_coherence: float = 0.75, junction_radius: float = 18.0):
         self.scene = scene
         self.sensors_xyz = sensors_xyz
         self.classifier = classifier
         self.eps, self.min_samples, self.min_points, self.max_range = eps, min_samples, min_points, max_range
+        self.lane_prior_points, self.lane_prior_coherence = lane_prior_points, lane_prior_coherence
+        self.junction_radius = junction_radius
         self.smap = SemanticMap(scene.crossing)
         # centre of the sensor constellation ~ centre of the intersection
         self.center = sensors_xyz[:, :2].mean(0)
@@ -165,7 +174,15 @@ class Detector:
         p = pts[idx]
         h = info["h"][idx]
         ground = float(np.median(p[:, 2] - h))
-        box = fit_box(p[:, :2].astype(np.float64), ground, ground + float(np.percentile(h, 98)))
+        xy = p[:, :2].astype(np.float64)
+        top = ground + float(np.percentile(h, 98))
+        box = fit_box(xy, ground, top)
+        # Sparse, partial views can't constrain the heading; on a road arm, vehicles follow the
+        # lane. Inside the junction lanes cross, so there the tracker's motion direction decides.
+        lane_yaw, coh = self.smap.lane_yaw(box[None, :2])
+        in_junction = np.hypot(*(box[:2] - self.center)) < self.junction_radius
+        if len(idx) < self.lane_prior_points and coh[0] >= self.lane_prior_coherence and not in_junction:
+            box = fit_box(xy, ground, top, yaw=float(lane_yaw[0]))
         if box[3] > 25 or box[4] > 8:  # walls/hedges that escaped the permanent mask
             return None
         return Cluster(idx=idx, box=box, features=self._features(p, h, box, info, idx))
@@ -218,15 +235,49 @@ class Detector:
     def detect(self, pts: np.ndarray, seq: str, min_score: float = 0.0) -> tuple[list[Cluster], dict]:
         clusters, info = self.clusters(pts, seq)
         self.classify(clusters)
-        dets = []
-        for c in clusters:
-            if c.cls == "background" or c.score < min_score:
-                continue
-            k = int(np.argmin(np.hypot(*(self.sensors_xyz[:, :2] - c.box[:2]).T)))
-            ground = c.box[2] - c.box[5] / 2
-            c.box = complete_box(c.box, c.cls, self.sensors_xyz[k, :2], ground)
-            dets.append(c)
+        dets = [c for c in clusters if c.cls != "background" and c.score >= min_score]
+        for c in dets:
+            self._complete(c)
+        dets = self._merge_fragments(pts, dets, info)
         return dets, info
+
+    def _complete(self, c: Cluster) -> None:
+        k = int(np.argmin(np.hypot(*(self.sensors_xyz[:, :2] - c.box[:2]).T)))
+        c.box = complete_box(c.box, c.cls, self.sensors_xyz[k, :2], c.box[2] - c.box[5] / 2)
+
+    def _merge_fragments(self, pts: np.ndarray, dets: list[Cluster], info: dict) -> list[Cluster]:
+        """Merge vehicle detections whose completed boxes overlap: they are pieces of one vehicle
+        (e.g. a car split by an occluding pole, or the front and back of a bus)."""
+        from .geometry import bev_intersection_matrix
+
+        vehicle = {"car", "van", "truck", "bus"}
+        changed = True
+        while changed and len(dets) > 1:
+            changed = False
+            boxes = np.stack([d.box for d in dets])
+            inter = bev_intersection_matrix(boxes, boxes)
+            area = boxes[:, 3] * boxes[:, 4]
+            overlap = inter / np.minimum(area[:, None], area[None, :])
+            np.fill_diagonal(overlap, 0)
+            for a, b in zip(*np.nonzero(np.triu(overlap > 0.25))):
+                da, db = dets[a], dets[b]
+                if da.cls not in vehicle or db.cls not in vehicle:
+                    continue
+                idx = np.concatenate([da.idx, db.idx])
+                merged = self._make_cluster(pts, idx, info)
+                if merged is None or merged.box[3] > 14.0:
+                    continue
+                self.classify([merged])
+                if merged.cls not in vehicle:  # the union doesn't look like one vehicle
+                    main = da if da.n_points >= db.n_points else db
+                    merged.cls = main.cls
+                    merged.score = main.score
+                merged.score = max(merged.score, da.score, db.score)
+                self._complete(merged)
+                dets = [d for k, d in enumerate(dets) if k not in (a, b)] + [merged]
+                changed = True
+                break
+        return dets
 
 
 def rule_based_class(f: np.ndarray) -> tuple[str, float]:
