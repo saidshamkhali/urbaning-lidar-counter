@@ -1,0 +1,103 @@
+# Build the live demo and publish it to GitHub Pages.
+#
+# The dataset is never committed: every run downloads UrbanIng-V2X from Harvard Dataverse
+# (the extracted LiDAR sweeps are kept in the Actions cache), runs the full pipeline and
+# ships the viewer together with its data to Pages.
+name: Deploy live demo
+
+on:
+  workflow_dispatch:
+    inputs:
+      refresh_data:
+        description: "Ignore the data cache and download the dataset again"
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+    paths:
+      - "ulc/**"
+      - "scripts/**"
+      - "web/**"
+      - "requirements.txt"
+      - ".github/workflows/pages.yml"
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Restore dataset cache
+        id: data-cache
+        if: ${{ !inputs.refresh_data }}
+        uses: actions/cache/restore@v4
+        with:
+          path: data
+          key: urbaning-crossing1-v1-${{ hashFiles('scripts/download_data.py') }}
+
+      - name: Download dataset (LiDAR + calibration + labels only)
+        if: steps.data-cache.outputs.cache-hit != 'true'
+        run: |
+          which 7z || sudo apt-get install -y p7zip-full
+          python -u scripts/download_data.py
+          du -sh data
+
+      - name: Save dataset cache
+        if: steps.data-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: data
+          key: urbaning-crossing1-v1-${{ hashFiles('scripts/download_data.py') }}
+
+      - name: Run pipeline (detect, track, count, evaluate, export)
+        run: python -u scripts/run_pipeline.py
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build viewer
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+          du -sh dist
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
