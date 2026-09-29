@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from ulc.background import CACHE_DIR, SceneModel  # noqa: E402
 from ulc.classify import in_box, load_models, train_leave_one_out  # noqa: E402
 from ulc.detect import Detector  # noqa: E402
-from ulc.evaluate import evaluate_many, evaluate_sequence, mark_visibility  # noqa: E402
+from ulc.evaluate import evaluate_many, evaluate_sequence, mark_trackable, mark_visibility  # noqa: E402
 from ulc.io import LIDAR, ROOT, Sequence, load_lanelet_map  # noqa: E402
 from ulc.labels import load_gt  # noqa: E402
 from ulc.schema import summarize  # noqa: E402
@@ -93,11 +93,9 @@ def process(seq_name: str, scene: SceneModel, model, export: bool) -> dict:
     frames, tracks = track_sequence(frames_det, dt=0.1)
     counts, unique = summarize(frames, tracks)
     pred = {"source": "detector", "frames": frames, "tracks": tracks, "counts": counts, "unique": unique}
-    gt = mark_visibility(gt, gt_npts, min_points=VIS_MIN_POINTS)
+    gt = mark_trackable(mark_visibility(gt, gt_npts, min_points=VIS_MIN_POINTS), min_visible_frames=5)
 
     metrics = evaluate_sequence(pred, gt, center=tuple(det.center))
-    metrics_visible = evaluate_sequence(pred, gt, center=tuple(det.center), count_key="counts_visible")
-    metrics["counting_visible"] = metrics_visible.get("counting_visible", metrics_visible["counting"])
     metrics["runtime"] = {"detect_s_per_frame": t_det / len(seq)}
 
     res_dir = RESULTS / seq_name
@@ -123,7 +121,7 @@ def process(seq_name: str, scene: SceneModel, model, export: bool) -> dict:
         }
         (out_dir / "meta.json").write_text(json.dumps(meta))
     print(f"[{seq_name}] {t_det / len(seq) * 1000:.0f} ms/frame | unique vehicles pred {unique['vehicle']} "
-          f"vs gt {gt['unique']['vehicle']} (visible {gt['unique_visible']['vehicle']})")
+          f"vs gt {gt['unique']['vehicle']} (trackable {gt['unique_trackable']['vehicle']})")
     return metrics
 
 
@@ -170,6 +168,7 @@ def main() -> None:
                 "duration_s": len(det["frames"]) / 10.0,
                 "unique_vehicles": det["unique"]["vehicle"], "unique_vehicles_gt": gt["unique"]["vehicle"],
                 "unique_vehicles_gt_visible": gt["unique_visible"]["vehicle"],
+                "unique_vehicles_gt_trackable": gt["unique_trackable"]["vehicle"],
             })
         (WEB_DATA / "index.json").write_text(json.dumps(index, indent=1))
     print(json.dumps(summary, indent=1, default=_json_default)[:3000])

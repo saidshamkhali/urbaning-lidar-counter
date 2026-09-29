@@ -388,6 +388,29 @@ def mark_visibility(gt: dict, n_points_per_frame: list[list[int]], min_points: i
     return out
 
 
+def mark_trackable(gt: dict, min_visible_frames: int = 5) -> dict:
+    """Add ``counts_trackable`` / ``unique_trackable``: GT vehicles whose track is visible
+    (not ignored) in at least ``min_visible_frames`` frames, counted in *every* frame they exist.
+
+    This is the fair reference for a tracker: a car that stops behind a bus is still present
+    and a tracker that remembers it should not be penalised. Requires :func:`mark_visibility`.
+    """
+    out = copy.deepcopy(gt)
+    frames = out.get("frames", [])
+    n_vis: dict = {}
+    for objects in frames:
+        for o in objects:
+            if not o.get("ignore", False):
+                n_vis[o["id"]] = n_vis.get(o["id"], 0) + 1
+    keep = {k for k, v in n_vis.items() if v >= min_visible_frames}
+    for objects in frames:
+        for o in objects:
+            o["trackable"] = o["id"] in keep
+    trackable = [[o for o in objects if o["trackable"]] for objects in frames]
+    out["counts_trackable"], out["unique_trackable"] = summarize(trackable, build_tracks(trackable))
+    return out
+
+
 def evaluate_sequence(
     pred: dict,
     gt: dict,
@@ -421,8 +444,9 @@ def evaluate_sequence(
         "detection": detection,
         "counting": _counting(pred, gt, p_frames, g_frames, count_key, stored),
     }
-    if "counts_visible" in gt:
-        metrics["counting_visible"] = _counting(pred, gt, p_frames, g_frames, "counts_visible", stored)
+    for key in ("counts_visible", "counts_trackable"):
+        if key in gt:
+            metrics[key.replace("counts", "counting")] = _counting(pred, gt, p_frames, g_frames, key, stored)
     metrics["tracking"] = _evaluate_tracking(p_frames, g_frames)
     return metrics
 
@@ -467,7 +491,7 @@ def evaluate_many(results: dict[str, dict]) -> dict:
     out["detection"] = {"iou_thresholds": dets[0]["iou_thresholds"], "iou_type": dets[0].get("iou_type"),
                         "vehicle": vehicle, "per_class": per_class, "by_range": by_range}
 
-    for key in ("counting", "counting_visible"):
+    for key in ("counting", "counting_visible", "counting_trackable"):
         blocks = [r[key] for r in seqs if key in r]
         if len(blocks) == len(seqs):
             out[key] = {
