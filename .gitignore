@@ -20,3 +20,4 @@ tools/recorder/node_modules/
 outputs/video/*/frames/
 outputs/cache/
 outputs/debug/
+.claude/
