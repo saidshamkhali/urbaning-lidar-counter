@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>UrbanIng LiDAR Counter</title>
+    <meta name="description" content="Infrastructure-only LiDAR vehicle detection, tracking and counting at an urban intersection in Ingolstadt." />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2304060a'/%3E%3Ccircle cx='16' cy='16' r='3' fill='%2339e1ff'/%3E%3Cpath d='M8 16a8 8 0 0 1 8-8M24 16a8 8 0 0 1-8 8' stroke='%2339e1ff' stroke-width='2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  </head>
+  <body>
+    <div id="app">
+      <div id="viewport"></div>
+      <div class="vignette"></div>
+
+      <div id="hud">
+        <!-- top bar -->
+        <header class="topbar glass">
+          <div class="brand">
+            <svg class="logo" viewBox="0 0 32 32" aria-hidden="true">
+              <circle cx="16" cy="16" r="2.6" />
+              <path d="M9 16a7 7 0 0 1 7-7" /><path d="M23 16a7 7 0 0 1-7 7" />
+              <path d="M4.5 16A11.5 11.5 0 0 1 16 4.5" class="faint" /><path d="M27.5 16A11.5 11.5 0 0 1 16 27.5" class="faint" />
+            </svg>
+            <div class="brand-text">
+              <div class="brand-title">URBANING <span>·</span> LIDAR COUNTER</div>
+              <div class="brand-sub">Infrastructure-only 3D perception · Ingolstadt</div>
+            </div>
+          </div>
+          <div class="top-center">
+            <label class="seq-select">
+              <span class="k">SEQ</span>
+              <select id="seq-select" aria-label="Sequence"></select>
+            </label>
+            <div class="seg" id="view-seg" role="tablist" aria-label="View">
+              <button data-view="bev" title="Bird's-eye view (1)">BEV</button>
+              <button data-view="orbit" title="Free 3D orbit (2)">3D Orbit</button>
+              <button data-view="follow" title="Follow selected track (3 / F)">Follow</button>
+            </div>
+          </div>
+          <div class="top-right">
+            <div class="live-pill" id="live-pill"><i></i><span id="live-text">LIVE · 10 Hz</span></div>
+            <button class="icon-btn" id="help-btn" title="Keyboard shortcuts (?)">?</button>
+          </div>
+        </header>
+
+        <!-- left column -->
+        <aside class="col col-left">
+          <section class="panel glass" id="count-panel">
+            <header class="panel-head" data-collapse>
+              <span class="panel-title">Live count</span>
+              <span class="panel-note">vehicles in frame</span>
+              <span class="chev"></span>
+            </header>
+            <div class="panel-body">
+              <div class="bignum-row">
+                <div class="bignum" id="c-vehicles">0</div>
+                <div class="bignum-side">
+                  <div class="gt-muted">GT <b id="c-vehicles-gt">–</b></div>
+                  <div class="delta" id="c-delta"></div>
+                </div>
+              </div>
+              <div class="split">
+                <div class="split-bar"><i id="c-moving-bar"></i></div>
+                <div class="split-legend">
+                  <span><i class="dot moving"></i>moving <b id="c-moving">0</b><em id="c-moving-gt"></em></span>
+                  <span><i class="dot parked"></i>parked <b id="c-parked">0</b><em id="c-parked-gt"></em></span>
+                </div>
+              </div>
+              <div class="class-rows" id="c-classes"></div>
+              <div class="vru-row">
+                <span><i class="dot vru"></i>VRU <small>cyclists · pedestrians</small></span>
+                <span><b id="c-vru">0</b><em id="c-vru-gt"></em></span>
+              </div>
+              <div class="unique">
+                <div class="unique-head"><span>Unique vehicles counted</span><span class="gt-muted" id="u-gt"></span></div>
+                <div class="unique-num"><b id="u-so-far">0</b><span>/ <span id="u-total">0</span></span></div>
+                <div class="progress"><i id="u-bar"></i><s id="u-bar-gt"></s></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel glass hidden" id="info-card">
+            <header class="panel-head">
+              <span class="panel-title" id="i-title">Track</span>
+              <span class="pill" id="i-status"></span>
+              <button class="icon-btn small" id="i-close" title="Deselect (Esc)">×</button>
+            </header>
+            <div class="panel-body">
+              <div class="info-main">
+                <div><div class="k">speed</div><div class="info-speed"><b id="i-speed">0</b><span>km/h</span></div></div>
+                <div class="info-cls" id="i-cls"></div>
+              </div>
+              <dl class="kv" id="i-kv"></dl>
+              <div class="info-actions">
+                <button class="btn" id="i-follow">Follow <kbd>F</kbd></button>
+              </div>
+            </div>
+          </section>
+        </aside>
+
+        <!-- right column -->
+        <aside class="col col-right">
+          <section class="panel glass" id="eval-panel">
+            <header class="panel-head" data-collapse>
+              <span class="panel-title">Evaluation</span>
+              <span class="panel-note">vehicles · sequence</span>
+              <span class="chev"></span>
+            </header>
+            <div class="panel-body" id="eval-body"></div>
+          </section>
+
+          <section class="panel glass" id="layers-panel">
+            <header class="panel-head" data-collapse>
+              <span class="panel-title">Layers</span>
+              <span class="chev"></span>
+            </header>
+            <div class="panel-body">
+              <div class="toggles" id="layer-toggles"></div>
+              <div class="compare-legend hidden" id="compare-legend">
+                <span><i class="sw tp"></i>TP <b id="cmp-tp">0</b></span>
+                <span><i class="sw fp"></i>FP <b id="cmp-fp">0</b></span>
+                <span><i class="sw fn"></i>FN <b id="cmp-fn">0</b></span>
+              </div>
+              <div class="field">
+                <div class="k">Point colour</div>
+                <div class="seg small" id="color-seg">
+                  <button data-mode="height" title="Height ramp">Height</button>
+                  <button data-mode="intensity" title="Return intensity">Intensity</button>
+                  <button data-mode="lidar" title="Colour by LiDAR">Sensor</button>
+                  <button data-mode="focus" title="Dim static background">Focus</button>
+                </div>
+              </div>
+              <div class="field">
+                <div class="k">Point size <span id="size-val"></span></div>
+                <input type="range" id="size-range" min="0.5" max="3" step="0.05" value="1" aria-label="Point size" />
+              </div>
+            </div>
+          </section>
+        </aside>
+
+        <!-- bottom dock -->
+        <footer class="dock">
+          <div class="timeline glass">
+            <div class="transport">
+              <button class="play" id="play-btn" title="Play / pause (Space)" aria-label="Play or pause">
+                <svg viewBox="0 0 24 24" class="i-play"><path d="M8 5.5v13l11-6.5z" /></svg>
+                <svg viewBox="0 0 24 24" class="i-pause"><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z" /></svg>
+              </button>
+              <div class="seg small" id="speed-seg">
+                <button data-speed="0.5">0.5×</button>
+                <button data-speed="1">1×</button>
+                <button data-speed="2">2×</button>
+                <button data-speed="4">4×</button>
+              </div>
+              <div class="frame-read">
+                <div class="frame-num"><b id="t-frame">0</b><span>/ <span id="t-frames">0</span></span></div>
+                <div class="frame-time" id="t-time">0.0 s</div>
+              </div>
+            </div>
+            <div class="chart" id="chart">
+              <div class="chart-legend">
+                <span><i class="ln det"></i>detected</span>
+                <span><i class="ln gt"></i>ground truth</span>
+                <span class="chart-title">vehicles per frame</span>
+              </div>
+              <svg id="chart-svg" preserveAspectRatio="none"></svg>
+              <div class="chart-tip hidden" id="chart-tip"></div>
+            </div>
+          </div>
+          <div class="statusline" id="statusline">
+            <span id="s-main">—</span>
+            <span class="s-right"><span id="s-buffer"></span><span id="s-view"></span><span id="s-fps"></span></span>
+          </div>
+        </footer>
+      </div>
+
+      <div id="caption" class="caption hidden">
+        <div class="cap-title">UrbanIng-V2X · Ingolstadt · infrastructure LiDAR only</div>
+        <div class="cap-line" id="cap-line"></div>
+      </div>
+
+      <div id="help" class="help glass hidden">
+        <div class="help-title">Keyboard</div>
+        <dl>
+          <dt><kbd>Space</kbd></dt><dd>play / pause</dd>
+          <dt><kbd>←</kbd><kbd>→</kbd></dt><dd>step frame (Shift: ×10)</dd>
+          <dt><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd></dt><dd>BEV · 3D orbit · follow</dd>
+          <dt><kbd>D</kbd><kbd>G</kbd><kbd>C</kbd></dt><dd>detections · ground truth · compare</dd>
+          <dt><kbd>M</kbd><kbd>T</kbd><kbd>L</kbd></dt><dd>map · trails · all labels</dd>
+          <dt><kbd>F</kbd></dt><dd>follow selected track</dd>
+          <dt><kbd>V</kbd></dt><dd>cycle point colour mode</dd>
+          <dt><kbd>H</kbd></dt><dd>hide / show interface</dd>
+          <dt><kbd>Esc</kbd></dt><dd>clear selection</dd>
+        </dl>
+        <div class="help-foot">Drag to pan (BEV) / orbit (3D) · wheel to zoom · right-drag to rotate</div>
+      </div>
+
+      <div id="splash" class="splash">
+        <div class="splash-inner">
+          <div class="splash-ring"></div>
+          <div class="splash-text" id="splash-text">Loading sequence…</div>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
